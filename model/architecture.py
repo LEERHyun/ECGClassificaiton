@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-#from . import arch_util
 import numbers
 from einops import rearrange
 import torchsummary
@@ -68,10 +67,8 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         x = self.project_in(x)
-        x1, x2 = self.dwconv(x).chunk(2, dim=1)
-        x = F.gelu(x1) * x2
-        #x = self.dwconv(x)
-        #x = self.sg(x)
+        x = self.dwconv(x)
+        x = self.sg(x)
         x = self.project_out(x)
         return x
 
@@ -196,104 +193,6 @@ class NAFBlock(nn.Module):
 
         return y + x * self.gamma
     
-class DoubleConv1D(nn.Module):
-    """(convolution => [BN] => ReLU) * 2"""
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.double_conv = nn.Sequential(
-            nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm1d(out_channels),
-            nn.ReLU(inplace=True)
-        )
-
-    def forward(self, x):
-        return self.double_conv(x)
-
-
-class Down1D(nn.Module):
-    """Downscaling with maxpool then double conv"""
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.maxpool_conv = nn.Sequential(
-            nn.MaxPool1d(2),
-            DoubleConv1D(in_channels, out_channels)
-        )
-
-    def forward(self, x):
-        return self.maxpool_conv(x)
-
-
-class Up1D(nn.Module):
-    """Upscaling then double conv"""
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.up = nn.ConvTranspose1d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-        self.conv = DoubleConv1D(in_channels, out_channels)
-
-    def forward(self, x1, x2):
-        x1 = self.up(x1)
-        
-        # input is (batch, channels, length)
-        diffL = x2.size()[2] - x1.size()[2]
-        
-        x1 = F.pad(x1, [diffL // 2, diffL - diffL // 2])
-        
-        # concatenate along channel dimension
-        x = torch.cat([x2, x1], dim=1)
-        return self.conv(x)
-
-
-class UNet1D(nn.Module):
-    def __init__(self, n_channels=1, n_classes=5):
-        """
-        1D U-Net for ECG signal classification
-        
-        Args:
-            n_channels: Number of input channels (1 for single-lead ECG)
-            n_classes: Number of output classes (Normal, APB, PVC, LBBB, RBBB)
-        """
-        super(UNet1D, self).__init__()
-        self.n_channels = n_channels
-        self.n_classes = n_classes
-
-        # Encoder
-        self.inc = DoubleConv1D(n_channels, 16)
-        self.down1 = Down1D(16, 32)
-        self.down2 = Down1D(32, 64)
-        self.down3 = Down1D(64, 128)
-        
-        # Bottleneck
-        self.down4 = Down1D(128, 256)
-        
-        # Decoder
-        self.up1 = Up1D(256, 128)
-        self.up2 = Up1D(128, 64)
-        self.up3 = Up1D(64, 32)
-        self.up4 = Up1D(32, 16)
-        
-        # Output layer
-        self.outc = nn.Conv1d(16, n_classes, kernel_size=1)
-
-    def forward(self, x):
-        # Encoder
-        x1 = self.inc(x)      # 16 channels
-        x2 = self.down1(x1)   # 32 channels
-        x3 = self.down2(x2)   # 64 channels
-        x4 = self.down3(x3)   # 128 channels
-        x5 = self.down4(x4)   # 256 channels (bottleneck)
-        
-        # Decoder with skip connections
-        x = self.up1(x5, x4)  # 128 channels
-        x = self.up2(x, x3)   # 64 channels
-        x = self.up3(x, x2)   # 32 channels
-        x = self.up4(x, x1)   # 16 channels
-        
-        # Output
-        logits = self.outc(x)
-        return logits
 #----------------------------------------------------------------------------------------
 #HybridModel
 #----------------------------------------------------------------------------------------
@@ -444,9 +343,3 @@ if __name__ == '__main__':
     print('{:<30}  {:<8}'.format('Computational Complexity: ', flops))
     print('{:<30}  {:<8}'.format('Parameters: ', params))
 
-    #unet = UNet1D(n_channels=1,n_classes=6)
-    #unet.to(device)
-    #torchsummary.summary(unet,(1,1024))
-    #flops, params = get_model_complexity_info(unet, (1,1024), verbose=False, print_per_layer_stat=False)
-    #print('{:<30}  {:<8}'.format('Computational Complexity: ', flops))
-    #print('{:<30}  {:<8}'.format('Parameters: ', params))
